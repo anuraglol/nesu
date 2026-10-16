@@ -1,0 +1,9 @@
+[package]
+name = "nesu"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitflags = "2.13.2"
+rand = "0.10.3"
+sdl2 = "0.38.0"
