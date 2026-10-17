@@ -1,4 +1,6 @@
+mod bus;
 pub mod cpu;
+mod instructions;
 pub mod opcodes;
 use cpu::CPU;
 use cpu::Mem;
@@ -86,7 +88,7 @@ fn main() {
     let video_subsystem = sdl_context.video().unwrap();
     eprintln!("video subsystem acquired");
     let window = video_subsystem
-        .window("Snake game", (32.0 * 10.0) as u32, (32.0 * 10.0) as u32)
+        .window("Snake game", (80.0 * 10.0) as u32, (80.0 * 10.0) as u32)
         .position_centered()
         .build()
         .unwrap();
