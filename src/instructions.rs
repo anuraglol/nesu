@@ -1,5 +1,5 @@
 use crate::bus::Mem;
-use crate::cpu::{AddressingMode, CpuFlags, CPU};
+use crate::cpu::{AddressingMode, CPU, CpuFlags};
 
 impl CPU {
     pub(crate) fn lda(&mut self, mode: &AddressingMode) {
@@ -117,6 +117,10 @@ impl CPU {
 
         self.status.set(CpuFlags::NEGATIV, data & 0b10000000 > 0);
         self.status.set(CpuFlags::OVERFLOW, data & 0b01000000 > 0);
+    }
+
+    pub(crate) fn sei(&mut self) {
+        self.status.insert(CpuFlags::INTERRUPT_DISABLE);
     }
 
     pub(crate) fn compare(&mut self, mode: &AddressingMode, compare_with: u8) {
