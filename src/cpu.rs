@@ -218,6 +218,14 @@ impl CPU {
         self.stack_pointer = self.stack_pointer.wrapping_sub(1);
     }
 
+    pub(crate) fn stack_push_u16(&mut self, value: u16) {
+        let hi = (value >> 8) as u8;
+        let lo = (value & 0xFF) as u8;
+
+        self.stack_push(hi);
+        self.stack_push(lo);
+    }
+
     pub(crate) fn stack_pop(&mut self) -> u8 {
         self.stack_pointer = self.stack_pointer.wrapping_add(1);
         let addr = 0x0100 | self.stack_pointer as u16;
@@ -246,6 +254,20 @@ impl CPU {
         self.run_with_callback(|_| {});
     }
 
+    fn interrupt_nmi(&mut self) {
+        self.stack_push_u16(self.program_counter);
+
+        let mut flag = self.status.clone();
+        flag.set(CpuFlags::BREAK, false);
+        flag.set(CpuFlags::BREAK2, true);
+
+        self.stack_push(flag.bits());
+        self.status.insert(CpuFlags::INTERRUPT_DISABLE);
+
+        self.bus.tick(2);
+        self.program_counter = self.mem_read_u16(0xfffA);
+    }
+
     pub fn run_with_callback<F>(&mut self, mut callback: F)
     where
         F: FnMut(&mut CPU),
@@ -253,6 +275,10 @@ impl CPU {
         let ref opcodes: HashMap<u8, &'static opcodes::OpCode> = *opcodes::OPCODES_MAP;
 
         loop {
+            if self.bus.poll_nmi_status().is_some() {
+                self.interrupt_nmi();
+            }
+
             let code = self.mem_read(self.program_counter);
             self.program_counter += 1;
             let program_counter_state = self.program_counter;
@@ -341,6 +367,8 @@ impl CPU {
             if program_counter_state == self.program_counter {
                 self.program_counter += (opcode.len - 1) as u16;
             }
+
+            self.bus.tick(opcode.cycles); // tick after program counter has been updated
 
             callback(self);
         }

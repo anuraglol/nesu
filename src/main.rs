@@ -3,6 +3,7 @@ pub mod cartridge;
 pub mod cpu;
 mod instructions;
 pub mod opcodes;
+pub mod ppu;
 mod trace;
 
 use bus::Bus;
