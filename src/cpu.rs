@@ -19,14 +19,14 @@ bitflags! {
 
 const STACK_RESET: u8 = 0xfd;
 
-pub struct CPU {
+pub struct CPU<'a> {
     pub register_a: u8,
     pub register_x: u8,
     pub register_y: u8,
     pub status: CpuFlags,
     pub program_counter: u16,
     pub stack_pointer: u8,
-    pub bus: Bus,
+    pub bus: Bus<'a>,
 }
 
 #[derive(Debug)]
@@ -46,7 +46,7 @@ pub enum AddressingMode {
     Relative,
 }
 
-impl Mem for CPU {
+impl<'a> Mem for CPU<'a> {
     fn mem_read(&self, addr: u16) -> u8 {
         self.bus.mem_read(addr)
     }
@@ -63,8 +63,8 @@ impl Mem for CPU {
     }
 }
 
-impl CPU {
-    pub fn new(bus: Bus) -> Self {
+impl<'a> CPU<'a> {
+    pub fn new(bus: Bus<'a>) -> Self {
         CPU {
             register_a: 0,
             register_x: 0,

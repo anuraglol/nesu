@@ -6,15 +6,19 @@ const PPU_REGISTERS: u16 = 0x2000;
 const PPU_REGISTERS_MIRRORS_END: u16 = 0x3FFF;
 const ROM_START: u16 = 0x8000;
 
-pub struct Bus {
+pub struct Bus<'a> {
     cpu_vram: [u8; 2048],
     rom: Rom,
     ppu: NesPPU,
     cycles: usize,
+    gameloop_callback: Box<dyn FnMut(&NesPPU) + 'a>,
 }
 
-impl Bus {
-    pub fn new(rom: Rom) -> Self {
+impl<'a> Bus<'a> {
+    pub fn new<F>(rom: Rom, gameloop_callback: F) -> Bus<'a>
+    where
+        F: FnMut(&NesPPU) + 'a,
+    {
         let ppu = NesPPU::new(rom.clone().chr_rom, rom.clone().screen_mirroring);
 
         Bus {
@@ -22,6 +26,7 @@ impl Bus {
             rom,
             ppu,
             cycles: 0,
+            gameloop_callback: Box::new(gameloop_callback),
         }
     }
 
@@ -29,9 +34,18 @@ impl Bus {
         self.ppu.poll_nmi_status()
     }
 
-    pub fn tick(&mut self, cycles: u8) -> bool {
+    pub fn tick(&mut self, cycles: u8) {
         self.cycles += cycles as usize;
-        self.ppu.tick(cycles * 3)
+
+        let nmi_before = self.ppu.nmi_interrupt.is_some();
+
+        self.ppu.tick(cycles * 3);
+
+        let nmi_after = self.ppu.nmi_interrupt.is_some();
+
+        if !nmi_before && nmi_after {
+            (self.gameloop_callback)(&self.ppu);
+        }
     }
 
     fn mem_read(&mut self, addr: u16) -> u8 {
@@ -107,7 +121,7 @@ pub trait Mem {
     }
 }
 
-impl Mem for Bus {
+impl<'a> Mem for Bus<'a> {
     fn mem_read(&self, addr: u16) -> u8 {
         match addr {
             RAM..=RAM_MIRRORS_END => {

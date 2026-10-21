@@ -325,6 +325,14 @@ impl ControlRegister {
     pub fn generate_vblank_nmi(&self) -> bool {
         self.contains(ControlRegister::GENERATE_NMI)
     }
+
+    pub fn bknd_pattern_addr(&self) -> u16 {
+        if self.contains(ControlRegister::BACKROUND_PATTERN_ADDR) {
+            0x1000
+        } else {
+            0x0000
+        }
+    }
 }
 
 impl StatusRegister {

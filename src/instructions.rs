@@ -1,7 +1,7 @@
 use crate::bus::Mem;
 use crate::cpu::{AddressingMode, CPU, CpuFlags};
 
-impl CPU {
+impl<'a> CPU<'a> {
     pub(crate) fn lda(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(&mode);
         let value = self.mem_read(addr);
