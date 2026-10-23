@@ -47,14 +47,14 @@ pub enum AddressingMode {
 }
 
 impl<'a> Mem for CPU<'a> {
-    fn mem_read(&self, addr: u16) -> u8 {
+    fn mem_read(&mut self, addr: u16) -> u8 {
         self.bus.mem_read(addr)
     }
 
     fn mem_write(&mut self, addr: u16, data: u8) {
         self.bus.mem_write(addr, data)
     }
-    fn mem_read_u16(&self, pos: u16) -> u16 {
+    fn mem_read_u16(&mut self, pos: u16) -> u16 {
         self.bus.mem_read_u16(pos)
     }
 
@@ -76,7 +76,7 @@ impl<'a> CPU<'a> {
         }
     }
 
-    pub fn get_absolute_address(&self, mode: &AddressingMode, addr: u16) -> u16 {
+    pub fn get_absolute_address(&mut self, mode: &AddressingMode, addr: u16) -> u16 {
         match mode {
             AddressingMode::ZeroPage => self.mem_read(addr) as u16,
             AddressingMode::Absolute => self.mem_read_u16(addr),
@@ -114,7 +114,7 @@ impl<'a> CPU<'a> {
         }
     }
 
-    pub(crate) fn get_operand_address(&self, mode: &AddressingMode) -> u16 {
+    pub(crate) fn get_operand_address(&mut self, mode: &AddressingMode) -> u16 {
         match mode {
             AddressingMode::Immediate => self.program_counter,
             AddressingMode::ZeroPage => self.mem_read(self.program_counter) as u16,

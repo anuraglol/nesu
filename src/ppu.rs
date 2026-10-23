@@ -22,11 +22,11 @@ pub struct NesPPU {
 
 impl NesPPU {
     pub fn new(chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
-        NesPPU {
-            chr_rom: chr_rom,
-            mirroring: mirroring,
+        Self {
+            chr_rom,
+            mirroring,
             vram: [0; 2048],
-            oam_data: [0; 64 * 4],
+            oam_data: [0; 256],
             palette_table: [0; 32],
             addr: AddrRegister::new(),
             ctrl: ControlRegister::new(),
@@ -43,36 +43,37 @@ impl NesPPU {
     }
 
     fn write_to_ctrl(&mut self, value: u8) {
-        let before_nmi_status = self.ctrl.generate_vblank_nmi();
+        let was_enabled = self.ctrl.generate_vblank_nmi();
         self.ctrl.update(value);
-        if !before_nmi_status && self.ctrl.generate_vblank_nmi() && self.status.is_in_vblank() {
+        if !was_enabled && self.ctrl.generate_vblank_nmi() && self.status.is_in_vblank() {
             self.nmi_interrupt = Some(1);
         }
     }
 
     pub fn poll_nmi_status(&mut self) -> Option<u8> {
-        self.nmi_interrupt.take() // .take() takes the Some and leaves None, useful to consume the state only once
+        self.nmi_interrupt.take()
     }
 
-    pub fn tick(&mut self, cycles: u8) -> bool {
-        self.cycles += cycles as usize;
-
+    pub fn tick(&mut self, cycles: usize) -> bool {
+        self.cycles += cycles;
         let mut frame_complete = false;
 
         while self.cycles >= 341 {
-            if self.cycles == 341 {
-                self.status.insert(StatusRegister::VBLANK_STARTED);
+            self.cycles -= 341;
+            self.scanline += 1;
 
+            if self.scanline == 241 {
+                self.status.insert(StatusRegister::VBLANK_STARTED);
                 if self.ctrl.generate_vblank_nmi() {
                     self.nmi_interrupt = Some(1);
                 }
             }
 
-            self.cycles -= 341;
-            self.scanline += 1;
-
             if self.scanline >= 262 {
                 self.scanline = 0;
+                self.status.remove(StatusRegister::VBLANK_STARTED);
+                self.status
+                    .remove(StatusRegister::SPRITE_ZERO_HIT | StatusRegister::SPRITE_OVERFLOW);
                 frame_complete = true;
             }
         }
@@ -85,7 +86,7 @@ impl NesPPU {
     }
 
     pub fn write_to_ctrl_register(&mut self, value: u8) {
-        self.ctrl.update(value);
+        self.write_to_ctrl(value);
     }
 
     fn increment_vram_addr(&mut self) {
@@ -102,15 +103,13 @@ impl NesPPU {
     }
 
     pub fn read_oam_data(&self) -> u8 {
-        return self.oam_data[self.oam_addr as usize];
+        self.oam_data[self.oam_addr as usize]
     }
 
     pub fn read_status(&mut self) -> u8 {
         let result = self.status.bits();
-
         self.status.remove(StatusRegister::VBLANK_STARTED);
         self.addr.reset_latch();
-
         result
     }
 
@@ -124,45 +123,46 @@ impl NesPPU {
         } else {
             self.scroll_y = value;
         }
-
         self.addr.toggle_latch();
     }
 
     pub fn read_data(&mut self) -> u8 {
         let addr = self.addr.get();
         self.increment_vram_addr();
-
         match addr {
-            0..=0x1fff => {
-                // read from chr_rom
+            0x0000..=0x1fff => {
                 let result = self.internal_data_buf;
                 self.internal_data_buf = self.chr_rom[addr as usize];
                 result
             }
-            0x2000..=0x2fff => {
-                // read from ram
+            0x2000..=0x2fff | 0x3000..=0x3eff => {
                 let result = self.internal_data_buf;
                 self.internal_data_buf = self.vram[self.mirror_vram_addr(addr) as usize];
                 result
             }
-            0x3000..=0x3eff => panic!(
-                "addr space 0x3000..0x3eff is not expected to be used, requested = {} ",
-                addr
-            ),
-            0x3f00..=0x3fff => self.palette_table[(addr - 0x3f00) as usize],
-            _ => panic!("unexpected access to mirrored space {}", addr),
+            0x3f00..=0x3fff => self.palette_table[Self::mirror_palette_addr(addr) as usize],
+            _ => 0,
         }
     }
 
+    fn mirror_palette_addr(addr: u16) -> usize {
+        let mut idx = ((addr - 0x3f00) % 32) as usize;
+        if matches!(idx, 0x10 | 0x14 | 0x18 | 0x1c) {
+            idx -= 0x10;
+        }
+        idx
+    }
+
     pub fn mirror_vram_addr(&self, addr: u16) -> u16 {
-        let mirrored_vram = addr & 0b10111111111111; // mirror down 0x3000-0x3eff to 0x2000 - 0x2eff
-        let vram_index = mirrored_vram - 0x2000; // to vram vector
-        let name_table = vram_index / 0x400; // to the name table index
+        let mirrored_vram = addr & 0x2fff;
+        let vram_index = mirrored_vram - 0x2000;
+        let name_table = vram_index / 0x400;
         match (&self.mirroring, name_table) {
             (Mirroring::Vertical, 2) | (Mirroring::Vertical, 3) => vram_index - 0x800,
-            (Mirroring::Horizontal, 2) => vram_index - 0x400,
             (Mirroring::Horizontal, 1) => vram_index - 0x400,
+            (Mirroring::Horizontal, 2) => vram_index - 0x400,
             (Mirroring::Horizontal, 3) => vram_index - 0x800,
+            (Mirroring::FourScreen, _) => vram_index,
             _ => vram_index,
         }
     }
@@ -170,31 +170,21 @@ impl NesPPU {
     pub fn write_to_data(&mut self, value: u8) {
         let addr = self.addr.get();
         self.increment_vram_addr();
-
         match addr {
-            0..=0x1fff => {
-                self.chr_rom[addr as usize] = value;
+            0x0000..=0x1fff => {
+                if let Some(byte) = self.chr_rom.get_mut(addr as usize) {
+                    *byte = value;
+                }
             }
-            0x2000..=0x2fff => {
-                let mirrored_addr = self.mirror_vram_addr(addr);
-                self.vram[mirrored_addr as usize] = value;
-            }
-            0x3000..=0x3eff => {
+            0x2000..=0x2fff | 0x3000..=0x3eff => {
                 let mirrored_addr = self.mirror_vram_addr(addr);
                 self.vram[mirrored_addr as usize] = value;
             }
             0x3f00..=0x3fff => {
-                let mut palette_idx = (addr - 0x3f00) % 32;
-                match palette_idx {
-                    0x10 => palette_idx = 0x00,
-                    0x14 => palette_idx = 0x04,
-                    0x18 => palette_idx = 0x08,
-                    0x1c => palette_idx = 0x0c,
-                    _ => {}
-                }
-                self.palette_table[palette_idx as usize] = value;
+                let palette_idx = Self::mirror_palette_addr(addr);
+                self.palette_table[palette_idx] = value & 0x3f;
             }
-            _ => panic!("unexpected access to mirrored space {}", addr),
+            _ => {}
         }
     }
 }
@@ -206,14 +196,15 @@ pub struct AddrRegister {
 
 impl AddrRegister {
     pub fn new() -> Self {
-        AddrRegister {
-            value: (0, 0), // high byte first, lo byte second
+        Self {
+            value: (0, 0),
             hi_ptr: true,
         }
     }
+
     fn set(&mut self, data: u16) {
         self.value.0 = (data >> 8) as u8;
-        self.value.1 = (data & 0xff) as u8;
+        self.value.1 = data as u8;
     }
 
     pub fn is_hi_ptr(&self) -> bool {
@@ -226,27 +217,16 @@ impl AddrRegister {
 
     pub fn update(&mut self, data: u8) {
         if self.hi_ptr {
-            self.value.0 = data;
+            self.value.0 = data & 0x3f;
         } else {
             self.value.1 = data;
         }
-
-        if self.get() > 0x3fff {
-            //mirror down addr above 0x3fff
-            self.set(self.get() & 0b11111111111111);
-        }
+        self.set(self.get() & 0x3fff);
         self.hi_ptr = !self.hi_ptr;
     }
 
     pub fn increment(&mut self, inc: u8) {
-        let lo = self.value.1;
-        self.value.1 = self.value.1.wrapping_add(inc);
-        if lo > self.value.1 {
-            self.value.0 = self.value.0.wrapping_add(1);
-        }
-        if self.get() > 0x3fff {
-            self.set(self.get() & 0b11111111111111); //mirror down addr above 0x3fff
-        }
+        self.set(self.get().wrapping_add(inc as u16) & 0x3fff);
     }
 
     pub fn reset_latch(&mut self) {
@@ -254,67 +234,50 @@ impl AddrRegister {
     }
 
     pub fn get(&self) -> u16 {
-        ((self.value.0 as u16) << 8) | (self.value.1 as u16)
+        ((self.value.0 as u16) << 8) | self.value.1 as u16
     }
 }
 
 bitflags! {
+    pub struct ControlRegister: u8 {
+        const NAMETABLE1 = 0b00000001;
+        const NAMETABLE2 = 0b00000010;
+        const VRAM_ADD_INCREMENT = 0b00000100;
+        const SPRITE_PATTERN_ADDR = 0b00001000;
+        const BACKROUND_PATTERN_ADDR = 0b00010000;
+        const SPRITE_SIZE = 0b00100000;
+        const MASTER_SLAVE_SELECT = 0b01000000;
+        const GENERATE_NMI = 0b10000000;
+    }
 
-   // 7  bit  0
-   // ---- ----
-   // VPHB SINN
-   // |||| ||||
-   // |||| ||++- Base nametable address
-   // |||| ||    (0 = $2000; 1 = $2400; 2 = $2800; 3 = $2C00)
-   // |||| |+--- VRAM address increment per CPU read/write of PPUDATA
-   // |||| |     (0: add 1, going across; 1: add 32, going down)
-   // |||| +---- Sprite pattern table address for 8x8 sprites
-   // ||||       (0: $0000; 1: $1000; ignored in 8x16 mode)
-   // |||+------ Background pattern table address (0: $0000; 1: $1000)
-   // ||+------- Sprite size (0: 8x8 pixels; 1: 8x16 pixels)
-   // |+-------- PPU master/slave select
-   // |          (0: read backdrop from EXT pins; 1: output color on EXT pins)
-   // +--------- Generate an NMI at the start of the
-   //            vertical blanking interval (0: off; 1: on)
-   pub struct ControlRegister: u8 {
-       const NAMETABLE1              = 0b00000001;
-       const NAMETABLE2              = 0b00000010;
-       const VRAM_ADD_INCREMENT      = 0b00000100;
-       const SPRITE_PATTERN_ADDR     = 0b00001000;
-       const BACKROUND_PATTERN_ADDR  = 0b00010000;
-       const SPRITE_SIZE             = 0b00100000;
-       const MASTER_SLAVE_SELECT     = 0b01000000;
-       const GENERATE_NMI            = 0b10000000;
-   }
-
-   pub struct StatusRegister: u8 {
-           const SPRITE_OVERFLOW = 0b0010_0000;
-           const SPRITE_ZERO_HIT = 0b0100_0000;
-           const VBLANK_STARTED  = 0b1000_0000;
+    pub struct StatusRegister: u8 {
+        const SPRITE_OVERFLOW = 0b0010_0000;
+        const SPRITE_ZERO_HIT = 0b0100_0000;
+        const VBLANK_STARTED = 0b1000_0000;
     }
 
     pub struct MaskRegister: u8 {
-            const GREYSCALE             = 0b0000_0001;
-            const SHOW_BACKGROUND_LEFT  = 0b0000_0010;
-            const SHOW_SPRITES_LEFT     = 0b0000_0100;
-            const SHOW_BACKGROUND       = 0b0000_1000;
-            const SHOW_SPRITES          = 0b0001_0000;
-            const EMPHASIZE_RED         = 0b0010_0000;
-            const EMPHASIZE_GREEN       = 0b0100_0000;
-            const EMPHASIZE_BLUE        = 0b1000_0000;
-        }
+        const GREYSCALE = 0b0000_0001;
+        const SHOW_BACKGROUND_LEFT = 0b0000_0010;
+        const SHOW_SPRITES_LEFT = 0b0000_0100;
+        const SHOW_BACKGROUND = 0b0000_1000;
+        const SHOW_SPRITES = 0b0001_0000;
+        const EMPHASIZE_RED = 0b0010_0000;
+        const EMPHASIZE_GREEN = 0b0100_0000;
+        const EMPHASIZE_BLUE = 0b1000_0000;
+    }
 }
 
 impl ControlRegister {
     pub fn new() -> Self {
-        ControlRegister::from_bits_truncate(0b00000000)
+        Self::empty()
     }
 
     pub fn vram_addr_increment(&self) -> u8 {
-        if !self.contains(ControlRegister::VRAM_ADD_INCREMENT) {
-            1
-        } else {
+        if self.contains(Self::VRAM_ADD_INCREMENT) {
             32
+        } else {
+            1
         }
     }
 
@@ -323,20 +286,41 @@ impl ControlRegister {
     }
 
     pub fn generate_vblank_nmi(&self) -> bool {
-        self.contains(ControlRegister::GENERATE_NMI)
+        self.contains(Self::GENERATE_NMI)
     }
 
     pub fn bknd_pattern_addr(&self) -> u16 {
-        if self.contains(ControlRegister::BACKROUND_PATTERN_ADDR) {
+        if self.contains(Self::BACKROUND_PATTERN_ADDR) {
             0x1000
         } else {
-            0x0000
+            0
         }
+    }
+
+    pub fn sprt_pattern_addr(&self) -> u16 {
+        if self.contains(Self::SPRITE_PATTERN_ADDR) {
+            0x1000
+        } else {
+            0
+        }
+    }
+
+    pub fn nametable_addr(&self) -> u16 {
+        match self.bits() & 0b11 {
+            0 => 0x2000,
+            1 => 0x2400,
+            2 => 0x2800,
+            _ => 0x2c00,
+        }
+    }
+
+    pub fn sprite_size_16(&self) -> bool {
+        self.contains(Self::SPRITE_SIZE)
     }
 }
 
 impl StatusRegister {
     pub fn is_in_vblank(&self) -> bool {
-        self.contains(StatusRegister::VBLANK_STARTED)
+        self.contains(Self::VBLANK_STARTED)
     }
 }
