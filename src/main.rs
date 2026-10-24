@@ -8,7 +8,6 @@ pub mod opcodes;
 pub mod palette;
 pub mod ppu;
 mod renderer;
-mod trace;
 
 use cartridge::Rom;
 use cpu::CPU;
@@ -22,7 +21,7 @@ use std::time::{Duration, Instant};
 const FRAME_TIME: Duration = Duration::from_nanos(16_639_000); // ~60.0988 Hz
 
 fn main() {
-    let file_bytes = fs::read("pacman.nes").expect("Failed to read pacman.nes");
+    let file_bytes = fs::read("./roms/pacman.nes").expect("failed to read rom file");
     let rom = Rom::new(&file_bytes).expect("Failed to parse ROM");
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
